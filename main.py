@@ -42,74 +42,75 @@ def get_yesterday_kst() -> str:
 
 
 # ------------------------------------------------------------------
+# 오류 안내용 예외
+# ------------------------------------------------------------------
+class BoxOfficeError(Exception):
+    """박스오피스 조회 중 문제가 생겼을 때, 화면에 보여줄 한국어 메시지를 담는 예외."""
+    pass
+
+
+# ------------------------------------------------------------------
 # API 호출 (같은 날짜는 1시간 동안 다시 호출하지 않도록 캐싱)
 # ------------------------------------------------------------------
-@st.cache_data(ttl=3600)  # 3600초 = 1시간 동안 결과를 기억함
-def fetch_box_office(target_dt: str) -> dict:
-    """
-    KOBIS API를 호출해서 결과를 dict로 반환한다.
-    성공/실패 여부를 함께 담아서, 화면 쪽에서 오류 메시지를 보여줄 수 있게 한다.
-    반환 형식: {"ok": True/False, "message": "...", "movies": [...]}
-    """
+# 주의: 이 함수가 실패하면 반드시 "예외(raise)"를 던져야 한다.
+# 만약 실패를 dict로 그냥 return 해버리면, 스트림릿이 "실패한 결과"까지
+# 1시간 동안 캐시해버려서, 예를 들어 인증키를 나중에 올바르게 고쳐도
+# 최대 1시간 동안 계속 같은 오류만 보이는 문제가 생긴다.
+# 반대로 예외를 던지면 스트림릿은 그 결과를 캐시하지 않으므로,
+# 다음 새로고침 때 바로 다시 정상적으로 API를 호출한다.
+@st.cache_data(ttl=3600)  # 3600초 = 1시간 동안 "성공한" 결과만 기억함
+def fetch_box_office(target_dt: str) -> list:
+    """KOBIS API를 호출해서 영화 목록(list[dict])을 반환한다. 실패 시 BoxOfficeError를 발생시킨다."""
     api_key = st.secrets.get("1faba8bb9be3b7bd55bde485aae12685")
     if not api_key:
-        return {
-            "ok": False,
-            "message": "KOBIS_KEY가 설정되어 있지 않습니다. 스트림릿 클라우드의 Secrets 설정을 확인해 주세요.",
-            "movies": [],
-        }
+        raise BoxOfficeError(
+            "KOBIS_KEY가 설정되어 있지 않습니다. 스트림릿 클라우드의 Secrets 설정을 확인해 주세요."
+        )
 
     params = {"key": api_key, "targetDt": target_dt}
+    # 일부 공공 API는 기본 User-Agent를 차단하는 경우가 있어, 브라우저처럼 보이는
+    # 헤더를 함께 보내 불필요한 차단을 예방한다.
+    headers = {"User-Agent": "Mozilla/5.0 (Streamlit BoxOffice App)"}
 
-    # 1) 네트워크 요청 자체가 실패하는 경우 (타임아웃, 연결 끊김 등)
+    # 1) 네트워크 요청 자체가 실패하는 경우 (타임아웃, 연결 끊김, 5xx 등)
     try:
-        response = requests.get(API_URL, params=params, timeout=10)
+        response = requests.get(API_URL, params=params, headers=headers, timeout=10)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        return {
-            "ok": False,
-            "message": f"KOBIS 서버에 요청하는 중 오류가 발생했습니다. 인터넷 연결과 API 주소를 확인해 주세요. (상세: {e})",
-            "movies": [],
-        }
+        raise BoxOfficeError(
+            f"KOBIS 서버에 요청하는 중 오류가 발생했습니다. 인터넷 연결과 API 주소를 확인해 주세요. (상세: {e})"
+        )
 
     # 2) 응답이 정상 JSON이 아닌 경우
     try:
         data = response.json()
     except ValueError:
-        return {
-            "ok": False,
-            "message": "서버 응답을 해석할 수 없습니다(JSON 형식이 아님). 잠시 후 다시 시도해 주세요.",
-            "movies": [],
-        }
+        raise BoxOfficeError("서버 응답을 해석할 수 없습니다(JSON 형식이 아님). 잠시 후 다시 시도해 주세요.")
 
     # 3) 인증키가 틀렸을 때 등 - 상태코드는 200이지만 faultInfo가 함께 오는 경우
+    #    실제 예: {"faultInfo": {"message": "유효하지않은 키값입니다.", "errorCode": "320010"}}
     if "faultInfo" in data:
         fault = data["faultInfo"]
         fault_msg = fault.get("message", "알 수 없는 오류")
-        return {
-            "ok": False,
-            "message": f"KOBIS API에서 오류를 반환했습니다: {fault_msg}\n인증키(KOBIS_KEY)가 올바른지 확인해 주세요.",
-            "movies": [],
-        }
+        fault_code = fault.get("errorCode", "-")
+        raise BoxOfficeError(
+            f"KOBIS API에서 오류를 반환했습니다: {fault_msg} (오류코드: {fault_code})\n"
+            "인증키(KOBIS_KEY)가 올바른지, Secrets에 정확히 등록되었는지 확인해 주세요."
+        )
 
-    # 4) 정상 구조인지, 영화 목록이 비어있지 않은지 확인
+    # 4) 정상 구조인지 확인
     try:
         movies = data["boxOfficeResult"]["dailyBoxOfficeList"]
     except (KeyError, TypeError):
-        return {
-            "ok": False,
-            "message": "응답 구조가 예상과 다릅니다. KOBIS API 명세가 변경되지 않았는지 확인해 주세요.",
-            "movies": [],
-        }
+        raise BoxOfficeError("응답 구조가 예상과 다릅니다. KOBIS API 명세가 변경되지 않았는지 확인해 주세요.")
 
+    # 5) 영화 목록이 비어있는 경우
     if not movies:
-        return {
-            "ok": False,
-            "message": f"{target_dt} 날짜의 박스오피스 데이터가 비어 있습니다. 아직 집계되지 않았거나 날짜를 확인해 주세요.",
-            "movies": [],
-        }
+        raise BoxOfficeError(
+            f"{target_dt} 날짜의 박스오피스 데이터가 비어 있습니다. 아직 집계되지 않았거나 날짜를 확인해 주세요."
+        )
 
-    return {"ok": True, "message": "", "movies": movies}
+    return movies
 
 
 # ------------------------------------------------------------------
@@ -135,14 +136,15 @@ def main():
     display_date = f"{target_dt[:4]}년 {target_dt[4:6]}월 {target_dt[6:]}일"
     st.caption(f"조회 날짜(한국 시간 기준 어제): {display_date}")
 
-    result = fetch_box_office(target_dt)
-
-    # 오류가 있으면 안내 문구만 보여주고 종료
-    if not result["ok"]:
-        st.error(result["message"])
+    # 오류가 있으면 안내 문구만 보여주고 종료 (실패는 캐시되지 않으므로,
+    # 원인을 고친 뒤 새로고침하면 바로 다시 정상적으로 API를 호출한다)
+    try:
+        movies = fetch_box_office(target_dt)
+    except BoxOfficeError as e:
+        st.error(str(e))
         return
 
-    df = to_dataframe(result["movies"])
+    df = to_dataframe(movies)
 
     # ---- 1위 영화 지표 카드 3장 ----
     top_movie = df.iloc[0]
