@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 # ------------------------------------------------------------------
 st.set_page_config(page_title="어제의 박스오피스", page_icon="🎬", layout="wide")
 
-API_URL = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchDailyBoxOfficeList.json?key=1faba8bb9be3b7bd55bde485aae12685&targetDt=20260916"
+API_URL = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchDailyBoxOfficeList.json"
 
 # 표에 보여줄 컬럼 이름과, API 응답에서 그 값을 가져올 키를 연결해둠
 COLUMN_MAP = {
