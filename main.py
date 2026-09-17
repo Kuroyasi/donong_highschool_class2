@@ -61,7 +61,7 @@ class BoxOfficeError(Exception):
 @st.cache_data(ttl=3600)  # 3600초 = 1시간 동안 "성공한" 결과만 기억함
 def fetch_box_office(target_dt: str) -> list:
     """KOBIS API를 호출해서 영화 목록(list[dict])을 반환한다. 실패 시 BoxOfficeError를 발생시킨다."""
-    api_key = st.secrets.get("1faba8bb9be3b7bd55bde485aae12685")
+    api_key = st.secrets.get("KOBIS_KEY")
     if not api_key:
         raise BoxOfficeError(
             "KOBIS_KEY가 설정되어 있지 않습니다. 스트림릿 클라우드의 Secrets 설정을 확인해 주세요."
